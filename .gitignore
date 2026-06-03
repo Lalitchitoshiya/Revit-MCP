@@ -1,0 +1,31 @@
+# Python (MCP server)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# .NET / C# (Revit add-in)
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.dll
+*.pdb
+
+# Revit / local session artifacts
+session.json
+*.rvt.lock
+*.log
+
+# Editors / OS
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
