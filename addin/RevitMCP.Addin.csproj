@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Revit add-in for the Revit MCP bridge (Phase 0 skeleton).
+
+    Revit 2025/2026 run on .NET 8 (net8.0-windows). The Revit API DLLs are NOT
+    redistributable and are not in this repo: they ship with Revit. Set the
+    RevitApiDir property (below or via `dotnet build -p:RevitApiDir=...`) to the
+    folder containing RevitAPI.dll / RevitAPIUI.dll on the build machine.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>RevitMCP.Addin</AssemblyName>
+    <RootNamespace>RevitMCP.Addin</RootNamespace>
+    <!-- Revit loads the add-in; do not produce an exe and do not generate a deps file. -->
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+
+    <!-- Override per machine/version: e.g. ...\Autodesk\Revit 2026 -->
+    <RevitApiDir Condition="'$(RevitApiDir)' == ''">C:\Program Files\Autodesk\Revit 2025</RevitApiDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="RevitAPI">
+      <HintPath>$(RevitApiDir)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>$(RevitApiDir)\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- System.Text.Json is built into the .NET 8 shared framework; no package needed. -->
+
+</Project>

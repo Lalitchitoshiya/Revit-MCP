@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Revit add-in manifest. Copy this file to:
+    %ProgramData%\Autodesk\Revit\Addins\<version>\RevitMCP.addin
+  and set <Assembly> to the full path of the built RevitMCP.Addin.dll.
+  (See addin/README in docs / Phase 0 notes.)
+-->
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>RevitMCP</Name>
+    <Assembly>RevitMCP.Addin.dll</Assembly>
+    <FullClassName>RevitMCP.Addin.RevitMcpApp</FullClassName>
+    <ClientId>8f1c9d2e-4b3a-4c6e-9a7d-2f0b5e1c7a44</ClientId>
+    <VendorId>RVTMCP</VendorId>
+    <VendorDescription>Revit MCP — natural-language BIM automation bridge</VendorDescription>
+  </AddIn>
+</RevitAddIns>
