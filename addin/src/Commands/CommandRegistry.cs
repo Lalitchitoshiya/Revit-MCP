@@ -19,7 +19,15 @@ public sealed class CommandRegistry
         return method != null && _commands.TryGetValue(method, out command!);
     }
 
-    /// <summary>Phase 0 registry: just the health check (docs/07 Phase 0).</summary>
+    /// <summary>Registry: Phase 0 health check + Phase 1 read-only discovery (docs/07).</summary>
     public static CommandRegistry CreateDefault() =>
-        new CommandRegistry().Register(new HealthCheckCommand());
+        new CommandRegistry()
+            .Register(new HealthCheckCommand())
+            .Register(new ModelSummaryCommand())
+            .Register(new LevelsListCommand())
+            .Register(new GridsListCommand())
+            .Register(new TypesListCommand())
+            .Register(new FamiliesSearchCommand())
+            .Register(new ElementsQueryCommand())
+            .Register(new ContextGetCommand());
 }

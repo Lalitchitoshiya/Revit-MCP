@@ -24,6 +24,9 @@ session.json
 *.rvt.lock
 *.log
 
+# Machine-specific MCP host config (absolute venv path); commit .mcp.json.example instead
+.mcp.json
+
 # Editors / OS
 .idea/
 *.swp

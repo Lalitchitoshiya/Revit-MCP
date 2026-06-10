@@ -10,7 +10,14 @@
   -->
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!--
+      Target framework must match the Revit runtime:
+        Revit 2024        -> net48
+        Revit 2025/2026   -> net8.0-windows
+        Revit 2027        -> net10.0-windows
+      Override per build:  dotnet build -p:TargetFramework=net8.0-windows
+    -->
+    <TargetFramework Condition="'$(TargetFramework)' == ''">net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>

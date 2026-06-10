@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy to .mcp.json and set `command` to your venv's python.exe (absolute path). Registers the Revit MCP server with your Claude host.",
+  "mcpServers": {
+    "revit": {
+      "type": "stdio",
+      "command": "<ABSOLUTE_PATH_TO>\\server\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "revit_mcp"],
+      "env": {}
+    }
+  }
+}
