@@ -19,7 +19,10 @@ public sealed class CommandRegistry
         return method != null && _commands.TryGetValue(method, out command!);
     }
 
-    /// <summary>Registry: Phase 0 health check + Phase 1 read-only discovery (docs/07).</summary>
+    /// <summary>
+    /// Registry: Phase 0 health check + Phase 1 read-only discovery +
+    /// Phase 2 mutation lifecycle (preview/commit/undo) (docs/07).
+    /// </summary>
     public static CommandRegistry CreateDefault() =>
         new CommandRegistry()
             .Register(new HealthCheckCommand())
@@ -29,5 +32,8 @@ public sealed class CommandRegistry
             .Register(new TypesListCommand())
             .Register(new FamiliesSearchCommand())
             .Register(new ElementsQueryCommand())
-            .Register(new ContextGetCommand());
+            .Register(new ContextGetCommand())
+            .Register(new PlanPreviewCommand())
+            .Register(new PlanCommitCommand())
+            .Register(new PlanUndoCommand());
 }

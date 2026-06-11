@@ -17,6 +17,10 @@ from .session import Session
 
 log = logging.getLogger("revit_mcp.client")
 
+# NDJSON responses for large models (e.g. query_elements) can exceed asyncio's
+# default 64 KB StreamReader limit. Raise it generously.
+_READ_LIMIT = 32 * 1024 * 1024
+
 
 class AddinError(Exception):
     """A structured error returned by the add-in (carries a code)."""
@@ -48,7 +52,7 @@ class AddinClient:
     async def connect(self) -> None:
         try:
             self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", self._session.port),
+                asyncio.open_connection("127.0.0.1", self._session.port, limit=_READ_LIMIT),
                 timeout=protocol.CONNECT_TIMEOUT_S,
             )
         except (OSError, asyncio.TimeoutError) as e:
