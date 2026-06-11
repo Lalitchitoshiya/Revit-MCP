@@ -31,6 +31,7 @@ public sealed class PlanUndoCommand : DocumentCommand
         using (var t = new Transaction(doc, $"RevitMCP: undo {planId}"))
         {
             t.Start();
+            Plans.SilentFailureHandler.Apply(t);
             foreach (var id in ids)
             {
                 if (doc.GetElement(id) == null) continue; // already gone

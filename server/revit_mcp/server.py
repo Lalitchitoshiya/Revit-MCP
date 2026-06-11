@@ -97,7 +97,9 @@ async def list_grids() -> dict:
 async def list_types(category: str) -> dict:
     """List available types for a category, e.g. "walls", "doors", "windows",
     "floors", "rooms". Returns id, family_name, type_name. Use the returned ids
-    to refer to a type precisely; never invent type names.
+    to refer to a type precisely; never invent type names. The same type_name can
+    appear under different families — when a name is ambiguous, reference the type
+    by `id`, and if intent is unclear ask the user which one.
     """
     return await _call("types.list", {"category": category})
 
@@ -127,6 +129,11 @@ async def query_elements(
     name, explicit ids, or proximity (near_point [x,y] + radius, in model units).
     Returns id, category, type_name, level, and a geometry summary per element.
     Provide at least one filter; results are capped at `limit`.
+
+    For spatial language ("the north wall", "the wall on the left"), use each
+    wall's geometry (line endpoints + `facing.cardinal`) to identify the right
+    element. If more than one element plausibly matches, list the candidates and
+    ASK the user which one — do not guess silently.
     """
     params: dict = {"limit": limit}
     if category is not None:
@@ -204,8 +211,16 @@ async def stage_plan(plan: dict) -> dict:
     or pass {"value": n, "unit": "mm|cm|m|ft|in"}. Reference levels/types by the
     exact names from list_levels/list_types — never invent them.
 
-    NEXT: call preview_plan(plan_id), show the user the result, and only commit
-    after they confirm.
+    A single plan can contain MANY actions and is committed atomically — compose
+    a compound request ("a 4x3 m room with a door") into ONE plan, using $handles
+    so a door can be hosted on a wall created earlier in the same plan.
+
+    Ground every reference in discovery results (list_levels/list_types/
+    query_elements) — never invent names. If a reference is ambiguous or the
+    intent is unclear, ASK the user rather than guessing.
+
+    NEXT: call preview_plan(plan_id), show the user the summary AND any warnings,
+    and only commit after they explicitly confirm.
     """
     plan_id = "pln_" + secrets.token_hex(5)
     token = "cft_" + secrets.token_hex(8)
@@ -225,7 +240,12 @@ async def stage_plan(plan: dict) -> dict:
 async def preview_plan(plan_id: str) -> dict:
     """Validate a staged plan READ-ONLY against the live model and report what
     would happen (per-action diagnostics + a summary). Nothing is modified.
-    Relay the summary and any warnings to the user before committing.
+
+    `overall` is "ok", "warnings", or "errors". Always relay the summary and any
+    warnings to the user before committing. If overall is "errors", the plan
+    cannot commit — fix the offending references (e.g. an AMBIGUOUS_REF lists the
+    candidate ids; a HOST_WRONG_CATEGORY means the host isn't a wall) or ask the
+    user, then stage and preview again.
     """
     entry = _plans.get(plan_id)
     if entry is None:
@@ -265,7 +285,27 @@ async def commit_plan(plan_id: str, confirmation_token: str) -> dict:
     })
     if result.get("ok"):
         _last_committed = plan_id
+        result["data"]["summary"] = _summarize_created(result["data"].get("created", []))
     return result
+
+
+_NOUNS = {"walls": "wall", "doors": "door", "windows": "window",
+          "floors": "floor", "rooms": "room", "levels": "level"}
+
+
+def _summarize_created(created: list[dict]) -> str:
+    """Human one-liner from the created elements, e.g. 'Created 4 walls, 1 door.'"""
+    counts: dict[str, int] = {}
+    for c in created:
+        cat = (c.get("category") or "element").lower()
+        counts[cat] = counts.get(cat, 0) + 1
+    if not counts:
+        return "Created nothing."
+    parts = []
+    for cat, n in counts.items():
+        noun = _NOUNS.get(cat, cat.rstrip("s") or cat)
+        parts.append(f"{n} {noun}{'' if n == 1 else 's'}")
+    return "Created " + ", ".join(parts) + "."
 
 
 @mcp.tool()
@@ -276,4 +316,8 @@ async def undo_plan(plan_id: str | None = None) -> dict:
     target = plan_id or _last_committed
     if target is None:
         return _err("PLAN_NOT_FOUND", "No committed plan to undo.")
-    return await _call("plan.undo", {"plan_id": target})
+    result = await _call("plan.undo", {"plan_id": target})
+    if result.get("ok"):
+        n = result["data"].get("deleted_count")
+        result["data"]["summary"] = f"Reverted plan {target}: removed {n} element(s)."
+    return result

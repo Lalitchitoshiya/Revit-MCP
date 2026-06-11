@@ -65,6 +65,7 @@ public sealed class PlanCommitCommand : DocumentCommand
             ActionHandlers.TryGet(action.Op, out var handler);
             using var t = new Transaction(doc, action.Op);
             t.Start();
+            SilentFailureHandler.Apply(t); // never block on a modal warning dialog (NFR-7)
             try
             {
                 var res = handler!.Execute(doc, u, action, handles);

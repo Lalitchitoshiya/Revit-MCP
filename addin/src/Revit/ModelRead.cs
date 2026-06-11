@@ -36,6 +36,8 @@ public static class ModelRead
                     kind = "wall",
                     line = new[] { u.Pt2(line.GetEndPoint(0)), u.Pt2(line.GetEndPoint(1)) },
                     height = TryLen(wall, BuiltInParameter.WALL_USER_HEIGHT_PARAM, u),
+                    // Exterior-face normal in plan, to disambiguate "the north wall" etc.
+                    facing = WallFacing(wall),
                 };
 
             case FamilyInstance fi:
@@ -68,6 +70,23 @@ public static class ModelRead
             kind = "bbox",
             center = bb != null ? u.Pt3((bb.Min + bb.Max) * 0.5) : null,
         };
+    }
+
+    /// <summary>Exterior-face normal as [x, y] + a cardinal label, for spatial language.</summary>
+    private static object? WallFacing(Wall wall)
+    {
+        try
+        {
+            var n = wall.Orientation;
+            return new { x = Math.Round(n.X, 3), y = Math.Round(n.Y, 3), cardinal = Cardinal(n.X, n.Y) };
+        }
+        catch { return null; }
+    }
+
+    private static string Cardinal(double x, double y)
+    {
+        if (Math.Abs(x) >= Math.Abs(y)) return x >= 0 ? "east" : "west";
+        return y >= 0 ? "north" : "south";
     }
 
     private static double? TryLen(Element e, BuiltInParameter bip, DocUnits u, bool isArea = false)

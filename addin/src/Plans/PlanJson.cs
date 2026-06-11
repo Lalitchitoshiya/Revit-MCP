@@ -159,8 +159,10 @@ public static class PlanJson
         }
         if (matches.Count > 1)
         {
-            diag = Diagnostic.Error(DiagCodes.AmbiguousRef, $"'{typeName}' matches {matches.Count} types.",
-                "Reference the type by id instead.");
+            var cands = string.Join("; ", matches.Take(6).Select(t => $"id {t.Id.Value} ({t.FamilyName})"));
+            diag = Diagnostic.Error(DiagCodes.AmbiguousRef,
+                $"'{typeName}' matches {matches.Count} types: {cands}.",
+                "Ask the user which one, then reference it by id.");
             return false;
         }
         typeId = matches[0].Id;
@@ -207,7 +209,10 @@ public static class PlanJson
         }
         if (levels.Count > 1)
         {
-            diag = Diagnostic.Error(DiagCodes.AmbiguousRef, $"'{levelName}' matches {levels.Count} levels.");
+            var cands = string.Join("; ", levels.Take(6).Select(l => $"id {l.Id.Value} (elev {l.Elevation:0.##})"));
+            diag = Diagnostic.Error(DiagCodes.AmbiguousRef,
+                $"'{levelName}' matches {levels.Count} levels: {cands}.",
+                "Ask the user which one, then reference it by id.");
             return false;
         }
         level = levels[0];
