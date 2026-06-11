@@ -89,6 +89,32 @@ public static class PlanJson
         return true;
     }
 
+    /// <summary>A list of [x, y] points in model units -> XYZ feet (Z = 0).</summary>
+    public static bool TryPointList(JsonElement p, string name, DocUnits u, out List<XYZ> pts, out Diagnostic? diag)
+    {
+        pts = new List<XYZ>();
+        diag = null;
+        if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty(name, out var arr) ||
+            arr.ValueKind != JsonValueKind.Array)
+        {
+            diag = Diagnostic.Error(DiagCodes.MissingField, $"'{name}' must be an array of [x, y] points.");
+            return false;
+        }
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Array || item.GetArrayLength() < 2)
+            {
+                diag = Diagnostic.Error(DiagCodes.InvalidBoundary, $"Each '{name}' entry must be [x, y].");
+                return false;
+            }
+            var xy = item.EnumerateArray().Take(2).ToArray();
+            if (!LengthToFeet(xy[0], u, $"{name}.x", out var x, out diag)) return false;
+            if (!LengthToFeet(xy[1], u, $"{name}.y", out var y, out diag)) return false;
+            pts.Add(new XYZ(x, y, 0));
+        }
+        return true;
+    }
+
     /// <summary>Resolve a type reference (id, {id}, or {type_name, category}).</summary>
     public static bool TryResolveType(Document doc, JsonElement p, string name, BuiltInCategory category,
         out ElementId typeId, out Diagnostic? diag)
@@ -185,6 +211,90 @@ public static class PlanJson
             return false;
         }
         level = levels[0];
+        return true;
+    }
+
+    /// <summary>Parse a host reference into either an existing id or a plan-local
+    /// handle (docs/06 §6.4). Forms: number, {id}, {handle:"$x"}, or "$x".</summary>
+    public static bool TryGetHostRef(JsonElement p, string name, out long? id, out string? handle, out Diagnostic? diag)
+    {
+        id = null;
+        handle = null;
+        diag = null;
+        if (!p.TryGetProperty(name, out var r))
+        {
+            diag = Diagnostic.Error(DiagCodes.MissingField, $"Missing required field '{name}'.");
+            return false;
+        }
+        if (r.ValueKind == JsonValueKind.String && r.GetString() is { } s && s.StartsWith('$'))
+        {
+            handle = s;
+            return true;
+        }
+        if (r.ValueKind == JsonValueKind.Object && r.TryGetProperty("handle", out var hEl) &&
+            hEl.GetString() is { } hs)
+        {
+            handle = hs;
+            return true;
+        }
+        if (TryGetId(r, out var idVal))
+        {
+            id = idVal;
+            return true;
+        }
+        diag = Diagnostic.Error(DiagCodes.HostMissing, $"'{name}' must be an element id or a $handle.");
+        return false;
+    }
+
+    /// <summary>Execute-time: resolve a host ref to a live element of an expected category.</summary>
+    public static bool TryResolveHostElement(Document doc, JsonElement p, string name, BuiltInCategory expected,
+        IReadOnlyDictionary<string, ElementId> handles, out Element host, out Diagnostic? diag)
+    {
+        host = null!;
+        if (!TryGetHostRef(p, name, out var id, out var handle, out diag)) return false;
+
+        ElementId hostId;
+        if (handle != null)
+        {
+            if (!handles.TryGetValue(handle, out hostId))
+            {
+                diag = Diagnostic.Error(DiagCodes.HostMissing, $"Handle '{handle}' was not created.");
+                return false;
+            }
+        }
+        else
+        {
+            hostId = ModelRead.ToElementId(id!.Value);
+        }
+
+        var el = doc.GetElement(hostId);
+        if (el == null)
+        {
+            diag = Diagnostic.Error(DiagCodes.HostMissing, $"Host element {hostId.Value} not found.");
+            return false;
+        }
+        if (el.Category?.Id.Value != (long)expected)
+        {
+            diag = Diagnostic.Error(DiagCodes.HostWrongCategory,
+                $"Host {hostId.Value} is '{el.Category?.Name}', not the expected category.");
+            return false;
+        }
+        host = el;
+        return true;
+    }
+
+    /// <summary>Resolve a FamilySymbol type ref (for hosted instances) and report if not loaded.</summary>
+    public static bool TryResolveSymbol(Document doc, JsonElement p, string name, BuiltInCategory category,
+        out FamilySymbol symbol, out Diagnostic? diag)
+    {
+        symbol = null!;
+        if (!TryResolveType(doc, p, name, category, out var typeId, out diag)) return false;
+        if (doc.GetElement(typeId) is not FamilySymbol fs)
+        {
+            diag = Diagnostic.Error(DiagCodes.FamilyNotLoaded, $"Type for '{name}' is not a loadable family symbol.");
+            return false;
+        }
+        symbol = fs;
         return true;
     }
 

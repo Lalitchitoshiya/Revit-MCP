@@ -14,9 +14,10 @@ public sealed class WallActionHandler : IActionHandler
     private static readonly double DefaultHeightFeet = 3000.0 / 304.8; // 3 m if unspecified
 
     public string Op => "place_wall";
+    public string ProducedCategory => "walls";
 
     public ActionPreview Preview(Document doc, DocUnits u, ActionNode action,
-        IReadOnlyDictionary<string, ElementId> handles)
+        IReadOnlyDictionary<string, string> handleCategories)
     {
         var r = new ActionPreview();
         var p = action.Params;

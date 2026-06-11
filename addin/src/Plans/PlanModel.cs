@@ -83,6 +83,10 @@ public static class DiagCodes
     public const string UnknownLevel = "UNKNOWN_LEVEL";
     public const string FamilyNotLoaded = "FAMILY_NOT_LOADED";
     public const string AmbiguousRef = "AMBIGUOUS_REF";
+    public const string HostMissing = "HOST_MISSING";
+    public const string HostWrongCategory = "HOST_WRONG_CATEGORY";
+    public const string RoomNotEnclosed = "ROOM_NOT_ENCLOSED";
+    public const string InvalidBoundary = "INVALID_BOUNDARY";
     public const string UnitlessLength = "UNITLESS_LENGTH";
     public const string ZeroLength = "ZERO_LENGTH";
     public const string WallVeryShort = "WALL_VERY_SHORT";

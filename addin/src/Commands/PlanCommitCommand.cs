@@ -39,16 +39,17 @@ public sealed class PlanCommitCommand : DocumentCommand
                 "This plan was not previewed (or preview had errors).", "Call preview_plan first.");
 
         // Re-validate read-only; never open a transaction for an error-laden plan.
-        var emptyHandles = new Dictionary<string, ElementId>();
+        var handleCategories = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < plan.Actions.Count; i++)
         {
-            if (!ActionHandlers.TryGet(plan.Actions[i].Op, out var h))
-                return RpcResponse.Failure(request.Id, "ACTION_FAILED",
-                    $"Unknown op '{plan.Actions[i].Op}'.");
-            var pre = h.Preview(doc, u, plan.Actions[i], emptyHandles);
+            var act = plan.Actions[i];
+            if (!ActionHandlers.TryGet(act.Op, out var h))
+                return RpcResponse.Failure(request.Id, "ACTION_FAILED", $"Unknown op '{act.Op}'.");
+            var pre = h.Preview(doc, u, act, handleCategories);
             if (pre.HasError)
                 return RpcResponse.Failure(request.Id, "PLAN_HAS_ERRORS",
-                    $"Action {i} ('{plan.Actions[i].Op}') has errors; not committed.");
+                    $"Action {i} ('{act.Op}') has errors; not committed.");
+            if (!string.IsNullOrEmpty(act.Handle)) handleCategories[act.Handle!] = h.ProducedCategory;
         }
 
         var handles = new Dictionary<string, ElementId>();

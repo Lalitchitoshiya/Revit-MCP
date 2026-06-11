@@ -24,7 +24,10 @@ public sealed class PlanPreviewCommand : DocumentCommand
         var doc = ctx.Doc;
         var u = DocUnits.From(doc);
         var plan = PlanNode.Parse(planEl);
-        var emptyHandles = new Dictionary<string, ElementId>();
+
+        // Accumulates handle -> produced category so a hosted action can validate
+        // a host that an earlier action in this plan will create (docs/06 §6.4).
+        var handleCategories = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var actions = new List<object>();
         var anyError = false;
@@ -42,13 +45,15 @@ public sealed class PlanPreviewCommand : DocumentCommand
             {
                 try
                 {
-                    preview = handler.Preview(doc, u, action, emptyHandles);
+                    preview = handler.Preview(doc, u, action, handleCategories);
                 }
                 catch (Exception ex)
                 {
                     preview = new ActionPreview();
                     preview.Add(Diagnostic.Error(DiagCodes.InvalidGeometry, ex.Message));
                 }
+                if (!string.IsNullOrEmpty(action.Handle))
+                    handleCategories[action.Handle!] = handler.ProducedCategory;
             }
 
             anyError |= preview.HasError;
@@ -81,12 +86,21 @@ public sealed class PlanPreviewCommand : DocumentCommand
     private static object Serialize(Diagnostic d) =>
         new { severity = d.Severity, code = d.Code, message = d.Message, hint = d.Hint };
 
+    private static readonly (string Op, string Noun)[] OpNouns =
+    {
+        ("place_wall", "wall"), ("place_door", "door"), ("place_window", "window"),
+        ("place_floor", "floor"), ("place_room", "room"), ("create_level", "level"),
+    };
+
     private static string Summarize(PlanNode plan, string overall)
     {
-        var walls = plan.Actions.Count(a => a.Op == "place_wall");
         if (overall == "errors") return "Plan has errors and cannot be committed as-is.";
         var parts = new List<string>();
-        if (walls > 0) parts.Add($"{walls} wall{(walls == 1 ? "" : "s")}");
+        foreach (var (op, noun) in OpNouns)
+        {
+            var n = plan.Actions.Count(a => a.Op == op);
+            if (n > 0) parts.Add($"{n} {noun}{(n == 1 ? "" : "s")}");
+        }
         var what = parts.Count > 0 ? string.Join(", ", parts) : $"{plan.Actions.Count} action(s)";
         return $"Would create {what}.";
     }
