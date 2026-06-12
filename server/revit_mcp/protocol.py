@@ -4,9 +4,11 @@ from __future__ import annotations
 
 PROTOCOL_VERSION = "1.0"
 
-# Default bounded timeouts (NFR-7). Commits get a larger ceiling in later phases.
+# Default bounded timeouts (NFR-7). Reads are quick; mutations may legitimately
+# take longer (large plans, regeneration), so commit/undo get a larger ceiling.
 CONNECT_TIMEOUT_S = 5.0
 REQUEST_TIMEOUT_S = 30.0
+COMMIT_TIMEOUT_S = 120.0
 
 
 class ErrorCodes:

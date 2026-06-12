@@ -103,8 +103,9 @@ class AddinClient:
         except asyncio.TimeoutError as e:
             raise AddinError(
                 protocol.ErrorCodes.REVIT_BUSY_TIMEOUT,
-                f"No response to '{method}' within {timeout}s.",
-                "Revit may be busy or showing a modal dialog.",
+                f"No response to '{method}' within {timeout}s — Revit's UI thread was busy.",
+                "Click into the Revit window, press Esc to cancel any active command, "
+                "close any open dialog, then retry. The plan is still staged.",
             ) from e
 
         outcome = "ok" if resp.get("ok") else (resp.get("error") or {}).get("code", "error")

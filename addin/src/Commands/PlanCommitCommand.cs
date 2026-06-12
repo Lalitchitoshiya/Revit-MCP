@@ -71,9 +71,21 @@ public sealed class PlanCommitCommand : DocumentCommand
                 var res = handler!.Execute(doc, u, action, handles);
                 t.Commit();
 
+                // Verify the element actually survived (Revit silently removes
+                // some invalid placements, e.g. a window too tall for its host).
+                var el = doc.GetElement(res.Id);
+                if (el == null)
+                {
+                    group.RollBack();
+                    return RpcResponse.Failure(request.Id, "ACTION_FAILED",
+                        $"Action {i} ('{action.Op}') was rejected by Revit — the element did not survive " +
+                        "(it may not fit its host or location). Nothing was committed.");
+                }
+
                 if (!string.IsNullOrEmpty(action.Handle)) handles[action.Handle!] = res.Id;
                 createdIds.Add(res.Id);
-                created.Add(new { handle = action.Handle, id = res.Id.Value, category = res.Category });
+                // Report the element's REAL category, not an assumed label.
+                created.Add(new { handle = action.Handle, id = res.Id.Value, category = el.Category?.Name ?? res.Category });
             }
             catch (Exception ex)
             {

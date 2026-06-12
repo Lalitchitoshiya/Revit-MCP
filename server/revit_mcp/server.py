@@ -33,7 +33,8 @@ def _err(code: str, message: str, hint: str | None = None) -> dict:
     return {"ok": False, "error": {"code": code, "message": message, "hint": hint}}
 
 
-async def _call(method: str, params: dict | None = None) -> dict:
+async def _call(method: str, params: dict | None = None,
+                timeout: float = protocol.REQUEST_TIMEOUT_S) -> dict:
     """Connect to the add-in, invoke one method, and wrap the result.
 
     Centralises session lookup, connection, and graceful error handling (NFR-7)
@@ -48,7 +49,7 @@ async def _call(method: str, params: dict | None = None) -> dict:
 
     try:
         async with AddinClient(session) as client:
-            result = await client.request(method, params)
+            result = await client.request(method, params, timeout=timeout)
             return {"ok": True, "data": result}
     except AddinError as e:
         log.warning("%s failed: %s", method, e)
@@ -282,7 +283,7 @@ async def commit_plan(plan_id: str, confirmation_token: str) -> dict:
         "plan_id": plan_id,
         "plan_hash": entry["plan_hash"],
         "plan": entry["plan"],
-    })
+    }, timeout=protocol.COMMIT_TIMEOUT_S)
     if result.get("ok"):
         _last_committed = plan_id
         result["data"]["summary"] = _summarize_created(result["data"].get("created", []))
@@ -316,7 +317,7 @@ async def undo_plan(plan_id: str | None = None) -> dict:
     target = plan_id or _last_committed
     if target is None:
         return _err("PLAN_NOT_FOUND", "No committed plan to undo.")
-    result = await _call("plan.undo", {"plan_id": target})
+    result = await _call("plan.undo", {"plan_id": target}, timeout=protocol.COMMIT_TIMEOUT_S)
     if result.get("ok"):
         n = result["data"].get("deleted_count")
         result["data"]["summary"] = f"Reverted plan {target}: removed {n} element(s)."
