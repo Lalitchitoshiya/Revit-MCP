@@ -1,0 +1,14 @@
+{
+  "_comment": "Product identity for installer/build.ps1. Fill the TODO fields before a store submission. NEVER change msi_upgrade_code or bundle_upgrade_code after the first public release: they are how Windows and Autodesk recognise upgrades.",
+  "name": "Revit MCP",
+  "description": "Use Claude to explore and build your Revit model in plain language: stage, preview, approve, and undo changes, with an audit log of who approved what.",
+  "publisher": "TODO Publisher Name",
+  "publisher_url": "https://example.com/TODO",
+  "support_email": "TODO@example.com",
+  "help_url": "https://example.com/TODO/revit-mcp/help",
+  "revit_versions": ["2025", "2026", "2027"],
+  "msi_upgrade_code": "DBD3D2E7-5814-46A9-9497-DDFED60207A5",
+  "bundle_upgrade_code": "FCC89533-8578-4121-BE24-62B921F9DA20",
+  "addin_client_id": "8f1c9d2e-4b3a-4c6e-9a7d-2f0b5e1c7a44",
+  "addin_vendor_id": "RVTMCP"
+}

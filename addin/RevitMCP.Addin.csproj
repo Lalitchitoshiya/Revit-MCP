@@ -1,37 +1,66 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Revit add-in for the Revit MCP bridge (Phase 0 skeleton).
+    Revit add-in for the Revit MCP bridge. One build per Revit version:
 
-    Revit 2025/2026 run on .NET 8 (net8.0-windows). The Revit API DLLs are NOT
-    redistributable and are not in this repo: they ship with Revit. Set the
-    RevitApiDir property (below or via `dotnet build -p:RevitApiDir=...`) to the
-    folder containing RevitAPI.dll / RevitAPIUI.dll on the build machine.
+      dotnet build -c Release -p:RevitVersion=2025   -> bin\Release\2025\  (net8.0-windows)
+      dotnet build -c Release -p:RevitVersion=2026   -> bin\Release\2026\  (net8.0-windows)
+      dotnet build -c Release -p:RevitVersion=2027   -> bin\Release\2027\  (net10.0-windows, default)
+
+    Revit API references: the reference-only NuGet packages Nice3point.Revit.Api.*
+    (compile-time only, nothing is shipped), so every version builds reproducibly
+    on a machine with one Revit, or none (CI). -p:UseLocalRevitApi=true compiles
+    against the installed Revit instead.
+    The Revit API DLLs are never copied to the output (Private=false / runtime excluded).
+
+    installer\build.ps1 builds all versions; addin\deploy.ps1 builds + deploys one
+    version for local development.
   -->
 
   <PropertyGroup>
-    <!--
-      Target framework must match the Revit runtime:
-        Revit 2024        -> net48
-        Revit 2025/2026   -> net8.0-windows
-        Revit 2027        -> net10.0-windows
-      Override per build:  dotnet build -p:TargetFramework=net8.0-windows
-    -->
+    <RevitVersion Condition="'$(RevitVersion)' == ''">2027</RevitVersion>
+    <!-- Revit 2025/2026 run on .NET 8, Revit 2027 on .NET 10. -->
+    <TargetFramework Condition="'$(RevitVersion)' == '2025' Or '$(RevitVersion)' == '2026'">net8.0-windows</TargetFramework>
     <TargetFramework Condition="'$(TargetFramework)' == ''">net10.0-windows</TargetFramework>
+
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <AssemblyName>RevitMCP.Addin</AssemblyName>
     <RootNamespace>RevitMCP.Addin</RootNamespace>
-    <!-- Revit loads the add-in; do not produce an exe and do not generate a deps file. -->
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DefineConstants>$(DefineConstants);REVIT$(RevitVersion)</DefineConstants>
 
-    <!-- Override per machine/version: e.g. ...\Autodesk\Revit 2026 -->
-    <RevitApiDir Condition="'$(RevitApiDir)' == ''">C:\Program Files\Autodesk\Revit 2025</RevitApiDir>
+    <!-- Product metadata. installer\build.ps1 passes -p:Version from the repo VERSION file. -->
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
+    <Company>Revit MCP</Company>
+    <Product>Revit MCP</Product>
+    <Description>Revit MCP add-in: connects Claude to Autodesk Revit (Revit $(RevitVersion)).</Description>
+
+    <!-- Separate output and intermediate folders per Revit version (2025 and 2026 share a TFM). -->
+    <OutputPath>bin\$(Configuration)\$(RevitVersion)\</OutputPath>
+    <IntermediateOutputPath>obj\$(Configuration)\$(RevitVersion)\</IntermediateOutputPath>
+
+    <!-- Opt-in only (-p:UseLocalRevitApi=true): the local Revit install's DLLs drag in
+         System.Drawing/VisualBasic version conflicts (MSB3277); the reference packages don't. -->
+    <RevitApiDir Condition="'$(RevitApiDir)' == ''">C:\Program Files\Autodesk\Revit $(RevitVersion)</RevitApiDir>
+    <UseLocalRevitApi Condition="'$(UseLocalRevitApi)' == '' Or !Exists('$(RevitApiDir)\RevitAPI.dll')">false</UseLocalRevitApi>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- WPF only (ribbon icons are ImageSource). Not UseWPF: that also pulls the
+         WinForms/System.Drawing facades, which conflict with Revit's references. -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RevitApiPackageVersion Condition="'$(RevitVersion)' == '2025'">2025.4.60</RevitApiPackageVersion>
+    <RevitApiPackageVersion Condition="'$(RevitVersion)' == '2026'">2026.4.10</RevitApiPackageVersion>
+    <RevitApiPackageVersion Condition="'$(RevitVersion)' == '2027'">2027.4.0</RevitApiPackageVersion>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UseLocalRevitApi)' == 'true'">
     <Reference Include="RevitAPI">
       <HintPath>$(RevitApiDir)\RevitAPI.dll</HintPath>
       <Private>false</Private>
@@ -42,6 +71,15 @@
     </Reference>
   </ItemGroup>
 
-  <!-- System.Text.Json is built into the .NET 8 shared framework; no package needed. -->
+  <ItemGroup Condition="'$(UseLocalRevitApi)' != 'true'">
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitApiPackageVersion)" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitApiPackageVersion)" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+  <Target Name="ReportRevitApi" BeforeTargets="CoreCompile">
+    <Message Importance="high" Text="RevitMCP: Revit $(RevitVersion), $(TargetFramework), API from $([MSBuild]::ValueOrDefault('$(UseLocalRevitApi)', 'false').Replace('true', 'local Revit install').Replace('false', 'NuGet reference package'))" />
+  </Target>
+
+  <!-- System.Text.Json is part of the .NET shared framework; no package needed. -->
 
 </Project>

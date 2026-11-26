@@ -31,6 +31,7 @@ public sealed class HealthCheckCommand : ICommand
             revit_version = app.VersionNumber,
             revit_version_name = app.VersionName,
             protocol_version = Wire.ProtocolVersion,
+            addin_version = Product.Version,
             document_open = doc != null,
             document_title = doc?.Title,
             units = new { length = lengthUnit, area = areaUnit },

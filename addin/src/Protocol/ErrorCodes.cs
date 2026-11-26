@@ -10,4 +10,12 @@ public static class ErrorCodes
     public const string UnknownMethod = "UNKNOWN_METHOD";
     public const string InvalidParams = "INVALID_PARAMS";
     public const string InternalError = "INTERNAL_ERROR";
+
+    // Access control (Auth/TokenValidator.cs)
+    public const string TokenExpired = "TOKEN_EXPIRED";
+    public const string TokenRevoked = "TOKEN_REVOKED";
+    public const string ScopeDenied = "SCOPE_DENIED";
+
+    // Governance
+    public const string AuditUnavailable = "AUDIT_UNAVAILABLE";
 }

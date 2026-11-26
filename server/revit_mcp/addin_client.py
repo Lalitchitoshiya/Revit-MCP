@@ -105,7 +105,8 @@ class AddinClient:
                 protocol.ErrorCodes.REVIT_BUSY_TIMEOUT,
                 f"No response to '{method}' within {timeout}s — Revit's UI thread was busy.",
                 "Click into the Revit window, press Esc to cancel any active command, "
-                "close any open dialog, then retry. The plan is still staged.",
+                "close any open dialog, then retry. If this was a commit, check "
+                "get_audit_log before retrying — its outcome is not known to this client.",
             ) from e
 
         outcome = "ok" if resp.get("ok") else (resp.get("error") or {}).get("code", "error")

@@ -3,6 +3,8 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Autodesk.Revit.UI;
+using RevitMCP.Addin.Audit;
+using RevitMCP.Addin.Auth;
 using RevitMCP.Addin.Diagnostics;
 using RevitMCP.Addin.Protocol;
 
@@ -13,25 +15,44 @@ namespace RevitMCP.Addin.Server;
 /// the Revit API (NFR-1): it parses requests, enqueues them, raises the
 /// ExternalEvent, and waits (bounded) for the UI thread to produce a response.
 ///
-/// Newline-delimited JSON framing, one client at a time, per-session token auth.
+/// Newline-delimited JSON framing, one client at a time. Every request is
+/// authenticated (session or scoped token, see <see cref="TokenValidator"/>) and
+/// authorised against the method's scope (<see cref="Scopes"/>); denials are
+/// written to the audit log.
 /// </summary>
 public sealed class SocketServer
 {
-    private const int RequestTimeoutMs = 30_000; // NFR-7 bounded wait → REVIT_BUSY_TIMEOUT
+    private const int RequestTimeoutMs = 30_000;   // NFR-7 bounded wait → REVIT_BUSY_TIMEOUT
+    private const int MutationTimeoutMs = 120_000; // commit/undo (matches server COMMIT_TIMEOUT_S)
+    private const int RunningGraceMs = 600_000;    // a mutation already running is allowed to finish
 
     private readonly string _token;
+    private readonly TokenValidator _validator;
     private readonly RequestQueue _queue;
     private readonly ExternalEvent _externalEvent;
 
     private TcpListener? _listener;
     private Thread? _acceptThread;
     private volatile bool _running;
+    private volatile TcpClient? _current;
+    private long _requestsServed;
 
     public int Port { get; private set; }
 
-    public SocketServer(string token, RequestQueue queue, ExternalEvent externalEvent)
+    // Read by the ribbon's Status dialog (any thread; values are informational).
+    public bool ClientConnected => _current != null;
+    public string? ClientIdentity { get; private set; }
+    public DateTime? ClientConnectedAt { get; private set; }
+    public long RequestsServed => Interlocked.Read(ref _requestsServed);
+    // Claude connects once per request and disconnects, so "last request" is the
+    // meaningful liveness signal, not "connected now".
+    public DateTime? LastRequestAt { get; private set; }
+    public string? LastClientIdentity { get; private set; }
+
+    public SocketServer(string token, TokenValidator validator, RequestQueue queue, ExternalEvent externalEvent)
     {
         _token = token;
+        _validator = validator;
         _queue = queue;
         _externalEvent = externalEvent;
     }
@@ -53,6 +74,8 @@ public sealed class SocketServer
     {
         _running = false;
         try { _listener?.Stop(); } catch { /* ignore */ }
+        // Drop the connected client too (ribbon "Pause"), not just the listener.
+        try { _current?.Close(); } catch { /* ignore */ }
         AddinLog.Info("Socket server stopped.");
     }
 
@@ -76,9 +99,18 @@ public sealed class SocketServer
             }
 
             // One client at a time (docs/05 §5.1).
+            _current = client;
             try { HandleClient(client); }
+            catch (IOException) when (!_running) { /* closed by Stop() (pause/shutdown) */ }
+            catch (ObjectDisposedException) when (!_running) { }
             catch (Exception ex) { AddinLog.Error("Client handler crashed", ex); }
-            finally { try { client.Close(); } catch { } }
+            finally
+            {
+                _current = null;
+                ClientIdentity = null;
+                ClientConnectedAt = null;
+                try { client.Close(); } catch { }
+            }
         }
     }
 
@@ -103,9 +135,18 @@ public sealed class SocketServer
             WriteHandshakeError(writer, ErrorCodes.VersionIncompatible);
             return;
         }
-        if (!TokenMatches(hello.Token))
+        try
         {
-            WriteHandshakeError(writer, ErrorCodes.BadToken);
+            var who = _validator.Verify(hello.Token);
+            AddinLog.Info($"Handshake ok: {who.Kind} sub={who.Sub} scopes=[{string.Join(",", who.Scopes)}]");
+            ClientIdentity = who.Kind == "session" ? "full access (session token)"
+                : $"{who.Sub} [{string.Join(", ", who.Scopes)}]";
+            ClientConnectedAt = DateTime.Now;
+        }
+        catch (AuthException ex)
+        {
+            AuditDenied("handshake", hello.Token, ex.Code, ex.Message);
+            WriteHandshakeError(writer, ex.Code);
             return;
         }
 
@@ -127,13 +168,32 @@ public sealed class SocketServer
             }
             if (req == null) continue;
 
-            if (!TokenMatches(req.Token))
+            // Re-verify on every request: tokens can expire, be revoked, or have
+            // their key rotated out while a connection is open.
+            Principal principal;
+            try { principal = _validator.Verify(req.Token); }
+            catch (AuthException ex)
             {
-                WriteResponse(writer, RpcResponse.Failure(req.Id, ErrorCodes.BadToken, "Invalid or missing token."));
+                AuditDenied(req.Method, req.Token, ex.Code, ex.Message);
+                WriteResponse(writer, RpcResponse.Failure(req.Id, ex.Code, ex.Message,
+                    "Issue a fresh token: revit-mcp-server auth issue ... (developer: python -m revit_mcp.auth issue)"));
                 continue;
             }
+            var need = Scopes.RequiredFor(req.Method);
+            if (!principal.Can(need))
+            {
+                var msg = $"Token '{principal.Sub}' (scopes: {string.Join(", ", principal.Scopes)}) may not call '{req.Method}'; it needs '{need}'.";
+                AuditDenied(req.Method, req.Token, ErrorCodes.ScopeDenied, msg, principal);
+                WriteResponse(writer, RpcResponse.Failure(req.Id, ErrorCodes.ScopeDenied, msg,
+                    "Use a client configured with a model:write token for changes."));
+                continue;
+            }
+            req.Principal = principal;
 
             var response = Dispatch(req);
+            Interlocked.Increment(ref _requestsServed);
+            LastRequestAt = DateTime.Now;
+            LastClientIdentity = ClientIdentity;
             WriteResponse(writer, response);
         }
 
@@ -149,22 +209,38 @@ public sealed class SocketServer
         _queue.Enqueue(pending);
         _externalEvent.Raise(); // serviced by Revit on the UI thread when idle
 
-        if (!pending.Done.Wait(RequestTimeoutMs))
+        var isMutation = Scopes.RequiredFor(req.Method) == Scopes.Write;
+        var timeoutMs = isMutation ? MutationTimeoutMs : RequestTimeoutMs;
+        if (pending.Done.Wait(timeoutMs)) return pending.Response!;
+
+        if (pending.TryCancel())
         {
-            // UI thread never serviced us in time (e.g. modal dialog open) — NFR-7.
-            AddinLog.Warn($"Request id={req.Id} method={req.Method} timed out after {RequestTimeoutMs}ms.");
+            // Never started: it is cancelled and will be skipped, so the client's
+            // "timed out" is the truth — nothing was (or will be) applied.
+            AddinLog.Warn($"Request id={req.Id} method={req.Method} timed out after {timeoutMs}ms; cancelled before it ran.");
             return RpcResponse.Failure(req.Id, ErrorCodes.RevitBusyTimeout,
-                "Revit did not service the request in time.",
+                "Revit did not start the request in time; it was cancelled and NOT applied.",
                 "Revit may be busy or showing a modal dialog. Close any dialogs and retry.");
         }
 
-        return pending.Response!;
+        // Already running on the UI thread: let it finish rather than report a
+        // result we don't know.
+        AddinLog.Warn($"Request id={req.Id} method={req.Method} still running after {timeoutMs}ms; waiting for it to finish.");
+        if (pending.Done.Wait(RunningGraceMs)) return pending.Response!;
+        return RpcResponse.Failure(req.Id, ErrorCodes.RevitBusyTimeout,
+            "Revit started the request but has not finished it; its outcome is unknown.",
+            "Check Revit for an open dialog, then check the audit log / model before retrying.");
     }
 
-    private bool TokenMatches(string? candidate) =>
-        !string.IsNullOrEmpty(candidate) &&
-        System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(candidate), Encoding.UTF8.GetBytes(_token));
+    private static void AuditDenied(string? method, string? token, string code, string reason, Principal? who = null) =>
+        AuditLog.Append("auth.denied", code, new
+        {
+            method,
+            reason,
+            principal = who?.ToAudit() ?? TokenValidator.DescribeUnverified(token),
+            os_user = Environment.UserName,
+            machine = Environment.MachineName,
+        });
 
     /// <summary>
     /// Run a health.check through the bridge to learn live version/document state
@@ -172,7 +248,11 @@ public sealed class SocketServer
     /// </summary>
     private WelcomeMessage ProbeDocumentState()
     {
-        var probe = Dispatch(new RpcRequest { Id = "hello", Token = _token, Method = "health.check" });
+        var probe = Dispatch(new RpcRequest
+        {
+            Id = "hello", Token = _token, Method = "health.check",
+            Principal = new Principal { Kind = "internal", Sub = "handshake-probe", Scopes = new[] { Scopes.Read } },
+        });
         var welcome = new WelcomeMessage();
         if (!probe.Ok || probe.Result == null) return welcome;
 

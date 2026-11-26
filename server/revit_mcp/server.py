@@ -2,22 +2,34 @@
 
 Phase 0: health_check. Phase 1: read-only discovery tools that ground the
 conversation in the live model (get_model_summary, list_levels, list_grids,
-list_types, search_families, query_elements, get_context).
+list_types, search_families, query_elements, get_context). Phase 2+: the
+stage -> preview -> approve -> commit -> undo lifecycle.
+
+Governance: human approval of commit/undo is requested by THIS server via MCP
+elicitation (the model cannot answer it), forwarded to the add-in, and written
+to the add-in's hash-chained audit log. Access is gated by scoped tokens
+(revit_mcp.auth), enforced in the add-in and pre-checked here.
 
 Logs go to STDERR — STDOUT is reserved for the MCP stdio transport.
 """
 
 from __future__ import annotations
 
+import getpass
 import logging
+import os
 import secrets
 import sys
+import time
+from datetime import datetime, timezone
 
-from mcp.server.fastmcp import FastMCP
+import mcp.types as mcp_types
+from mcp.server.fastmcp import Context, FastMCP
+from pydantic import BaseModel, Field
 
-from . import protocol
+from . import __version__, audit, auth, protocol
 from .addin_client import AddinClient, AddinError
-from .session import SessionNotFound, read_session
+from .session import Session, SessionNotFound, read_session
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +59,10 @@ async def _call(method: str, params: dict | None = None,
         return _err(protocol.ErrorCodes.NO_SESSION_FILE, str(e),
                     "Open Revit with the RevitMCP add-in installed, then retry.")
 
+    denied = _precheck_scope(session, method)
+    if denied is not None:
+        return denied
+
     try:
         async with AddinClient(session) as client:
             result = await client.request(method, params, timeout=timeout)
@@ -59,13 +75,55 @@ async def _call(method: str, params: dict | None = None,
         return _err(protocol.ErrorCodes.INTERNAL_ERROR, str(e))
 
 
+def _precheck_scope(session: Session, method: str) -> dict | None:
+    """Fail fast (with a useful hint) when the configured token obviously can't
+    call `method`. UX only — the add-in re-verifies signature, expiry, revocation
+    and scope on every request and is the real enforcement point."""
+    claims = auth.decode_unverified(session.token)
+    if claims is None:
+        return None  # legacy session token: full access, add-in decides
+    if time.time() >= claims.get("exp", 0):
+        return _err("TOKEN_EXPIRED", f"The configured access token ({claims.get('sub')}) has expired.",
+                    "Issue a new one: revit-mcp-server auth issue ... (developer: python -m revit_mcp.auth issue)")
+    need = auth.required_scope(method)
+    if need not in claims.get("scopes", []):
+        return _err("SCOPE_DENIED",
+                    f"This client's token ({claims.get('sub')}) has scopes {claims.get('scopes')}; "
+                    f"'{method}' needs '{need}'.",
+                    "This client is not allowed to change the model. Ask the user to make the change "
+                    "from a client holding a model:write token.")
+    return None
+
+
+def _access_info() -> dict:
+    """What the configured credential allows (decoded, unverified — for display)."""
+    try:
+        session = read_session()
+    except Exception:  # noqa: BLE001
+        return {"token_source": None}
+    claims = auth.decode_unverified(session.token)
+    if claims is None:
+        return {"token_source": session.token_source, "kind": "session",
+                "sub": "session", "scopes": list(auth.ALL_SCOPES), "expires_at": None}
+    return {"token_source": session.token_source, "kind": "scoped", "sub": claims.get("sub"),
+            "scopes": claims.get("scopes"), "jti": claims.get("jti"),
+            "expires_at": datetime.fromtimestamp(claims.get("exp", 0), timezone.utc).isoformat()}
+
+
 @mcp.tool()
 async def health_check() -> dict:
     """Check that Revit is reachable and report its version, the open document,
     and the model's units. Call this FIRST in a session; if data.document_open
     is false, ask the user to open a project before doing anything else.
+    `data.access` shows what this client may do (scopes, expiry) and
+    `data.approval_mode` how commits are approved.
     """
-    return await _call("health.check")
+    result = await _call("health.check")
+    if result.get("ok"):
+        result["data"]["server_version"] = __version__
+        result["data"]["access"] = _access_info()
+        result["data"]["approval_mode"] = _approval_mode()
+    return result
 
 
 @mcp.tool()
@@ -165,9 +223,12 @@ async def get_context() -> dict:
 #
 # The plan registry and confirmation enforcement live HERE, in the server. The
 # add-in receives a fully-formed plan on preview/commit and performs the actual,
-# transactional model changes. A commit is REFUSED unless it carries the exact
-# confirmation_token issued at staging — which the user must approve. Claude must
-# not fabricate the token or commit without showing the preview and asking first.
+# transactional model changes. A commit is REFUSED unless (1) it carries the
+# confirmation_token issued at staging, (2) the plan was previewed without
+# errors, (3) it has not already been committed (single-use), and (4) a HUMAN
+# approves it through an MCP elicitation prompt raised by this server (see
+# _approval_mode) — the model cannot answer that prompt. The add-in separately
+# refuses un-previewed/changed plans, enforces token scope, and writes the audit.
 
 _plans: dict[str, dict] = {}
 _last_committed: str | None = None
@@ -221,11 +282,12 @@ async def stage_plan(plan: dict) -> dict:
     intent is unclear, ASK the user rather than guessing.
 
     NEXT: call preview_plan(plan_id), show the user the summary AND any warnings,
-    and only commit after they explicitly confirm.
+    then call commit_plan — the server itself asks the user to approve.
     """
     plan_id = "pln_" + secrets.token_hex(5)
     token = "cft_" + secrets.token_hex(8)
-    _plans[plan_id] = {"plan": plan, "token": token, "previewed": False, "plan_hash": None}
+    _plans[plan_id] = {"plan": plan, "token": token, "previewed": False, "plan_hash": None,
+                       "summary": None, "warnings": [], "status": "staged"}
     diags = _shape_diagnostics(plan)
     log.info("staged %s (%d actions, %d shape diagnostics)",
              plan_id, len(plan.get("actions", [])), len(diags))
@@ -257,20 +319,100 @@ async def preview_plan(plan_id: str) -> dict:
         data = result["data"]
         entry["plan_hash"] = data.get("plan_hash")
         entry["previewed"] = data.get("overall") != "errors"
+        entry["summary"] = data.get("summary")
+        entry["warnings"] = [d.get("message") for a in data.get("actions", [])
+                             for d in a.get("diagnostics", []) if d.get("severity") == "warning"]
     return result
 
 
+class _ApprovalForm(BaseModel):
+    approve: bool = Field(description="Approve this change to the Revit model?")
+    comment: str = Field(default="", description="Optional note for the audit log")
+
+
+def _approval_mode() -> str:
+    """REVIT_MCP_APPROVAL:
+    - "elicit"          the server asks the human; a client that can't show the
+                        prompt cannot commit (strongest — use for demo/production)
+    - "elicit_or_token" (default) ask the human when the client supports it,
+                        otherwise fall back to the confirmation token alone and
+                        record the approval as NOT human-verified
+    - "token"           legacy: confirmation token only (not human-verified)
+    """
+    mode = os.environ.get("REVIT_MCP_APPROVAL", "elicit_or_token").strip().lower()
+    return mode if mode in ("elicit", "elicit_or_token", "token") else "elicit_or_token"
+
+
+def _client_can_elicit(ctx: Context | None) -> bool:
+    if ctx is None:
+        return False
+    try:
+        return ctx.session.check_client_capability(
+            mcp_types.ClientCapabilities(elicitation=mcp_types.ElicitationCapability()))
+    except Exception:  # noqa: BLE001 — no request context (direct call from a script)
+        return False
+
+
+def _client_name(ctx: Context | None) -> str | None:
+    try:
+        info = ctx.session.client_params.clientInfo  # type: ignore[union-attr]
+        return f"{info.name} {info.version}".strip()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+async def _obtain_approval(ctx: Context | None, prompt: str) -> tuple[dict | None, dict | None]:
+    """Ask the HUMAN (not the model) to approve. Returns (approval, error)."""
+    mode = _approval_mode()
+    base = {"approved_by": getpass.getuser(), "client": _client_name(ctx), "mode": mode,
+            "prompt": prompt}
+
+    if mode != "token" and _client_can_elicit(ctx):
+        result = await ctx.elicit(prompt, _ApprovalForm)  # type: ignore[union-attr]
+        if result.action == "accept" and result.data.approve:
+            return {**base, "method": "elicitation", "human_verified": True,
+                    "approved_at": _utc_now(), "comment": result.data.comment or None}, None
+        log.info("approval not given (%s)", result.action)
+        return None, _err("APPROVAL_DECLINED", "The user did not approve this change; nothing was modified.",
+                          "Ask the user what they would like to change, then stage a new plan.")
+
+    if mode == "elicit":
+        return None, _err("APPROVAL_UNAVAILABLE",
+                          "This server requires human approval via an approval prompt, but the connected "
+                          "client cannot display one. Nothing was modified.",
+                          "Use a client that supports MCP elicitation (e.g. Claude Code), or set "
+                          "REVIT_MCP_APPROVAL=elicit_or_token.")
+    return {**base, "method": "confirmation_token", "human_verified": False,
+            "approved_at": _utc_now(), "comment": None}, None
+
+
+def _precheck_configured(method: str) -> dict | None:
+    try:
+        return _precheck_scope(read_session(), method)
+    except Exception:  # noqa: BLE001 — no session: _call reports it properly
+        return None
+
+
 @mcp.tool()
-async def commit_plan(plan_id: str, confirmation_token: str) -> dict:
+async def commit_plan(plan_id: str, confirmation_token: str, ctx: Context = None) -> dict:  # type: ignore[assignment]
     """Commit a previewed plan to the model in ONE undoable transaction.
-    REFUSED unless confirmation_token matches the one from stage_plan — only
-    call this after the user has explicitly confirmed the previewed plan.
-    Returns the created element ids.
+    REFUSED unless confirmation_token matches the one from stage_plan. Before
+    committing, the SERVER shows the user an approval prompt with the previewed
+    summary; the change is applied only if they approve it there. On
+    APPROVAL_DECLINED nothing changed — ask the user what to adjust. Each plan
+    commits at most once. Returns the created element ids.
     """
     global _last_committed
     entry = _plans.get(plan_id)
     if entry is None:
         return _err("PLAN_NOT_FOUND", f"No staged plan '{plan_id}'.")
+    if entry["status"] == "committed":
+        return _err("PLAN_ALREADY_COMMITTED", f"Plan '{plan_id}' was already committed.",
+                    "Stage a new plan for further changes.")
     if confirmation_token != entry["token"]:
         return _err("CONFIRMATION_REQUIRED",
                     "Missing or invalid confirmation token.",
@@ -278,15 +420,34 @@ async def commit_plan(plan_id: str, confirmation_token: str) -> dict:
     if not entry["previewed"]:
         return _err("PLAN_NOT_PREVIEWED", "Preview the plan (without errors) before committing.",
                     "Call preview_plan first.")
+    # Don't ask a human to approve something this client isn't allowed to do.
+    denied = _precheck_configured("plan.commit")
+    if denied is not None:
+        return denied
+
+    plan = entry["plan"]
+    lines = ["Approve this change to the Revit model?",
+             f"Intent: {plan.get('intent') or '(none given)'}",
+             f"Preview: {entry.get('summary') or str(len(plan.get('actions', []))) + ' action(s)'}"]
+    if entry.get("warnings"):
+        lines.append("Warnings: " + "; ".join(entry["warnings"][:5]))
+    lines.append(f"Plan {plan_id} - applied as one undoable step.")
+    approval, error = await _obtain_approval(ctx, "\n".join(lines))
+    if error is not None:
+        return error
 
     result = await _call("plan.commit", {
         "plan_id": plan_id,
         "plan_hash": entry["plan_hash"],
-        "plan": entry["plan"],
+        "plan": plan,
+        "approval": approval,
+        "summary": entry.get("summary"),
     }, timeout=protocol.COMMIT_TIMEOUT_S)
     if result.get("ok"):
+        entry["status"] = "committed"
         _last_committed = plan_id
         result["data"]["summary"] = _summarize_created(result["data"].get("created", []))
+        result["data"]["approval"] = {k: approval[k] for k in ("method", "human_verified", "approved_by")}
     return result
 
 
@@ -310,15 +471,50 @@ def _summarize_created(created: list[dict]) -> str:
 
 
 @mcp.tool()
-async def undo_plan(plan_id: str | None = None) -> dict:
+async def undo_plan(plan_id: str | None = None, ctx: Context = None) -> dict:  # type: ignore[assignment]
     """Undo a committed plan, removing the elements it created. Defaults to the
-    most recently committed plan when plan_id is omitted.
+    most recently committed plan when plan_id is omitted. The server asks the
+    user to approve the removal first (it deletes elements — and anything Revit
+    hosts on them, e.g. doors a user later placed on those walls).
     """
+    global _last_committed
     target = plan_id or _last_committed
     if target is None:
         return _err("PLAN_NOT_FOUND", "No committed plan to undo.")
-    result = await _call("plan.undo", {"plan_id": target}, timeout=protocol.COMMIT_TIMEOUT_S)
+    denied = _precheck_configured("plan.undo")
+    if denied is not None:
+        return denied
+    entry = _plans.get(target) or {}
+    what = entry.get("summary") or "the elements created by that plan"
+    approval, error = await _obtain_approval(
+        ctx, f"Approve UNDO of plan {target}?\nThis removes: {what}\n"
+             "(plus anything Revit hosts on those elements).")
+    if error is not None:
+        return error
+    result = await _call("plan.undo", {"plan_id": target, "approval": approval,
+                                       "summary": f"Undo: {what}"},
+                         timeout=protocol.COMMIT_TIMEOUT_S)
     if result.get("ok"):
         n = result["data"].get("deleted_count")
         result["data"]["summary"] = f"Reverted plan {target}: removed {n} element(s)."
+        if entry:
+            entry["status"] = "undone"
+        if _last_committed == target:
+            _last_committed = None
     return result
+
+
+@mcp.tool()
+async def get_audit_log(limit: int = 10) -> dict:
+    """Show recent entries of the local approval audit log: who approved each
+    model change, when, how (human-verified prompt vs token only), what was
+    created/removed, and which access token was used. Also reports whether the
+    log's tamper-evident hash chain is intact.
+    """
+    ok, n, msg = audit.verify()
+    recs = audit.tail(max(1, min(limit, 100)))
+    return {"ok": True, "data": {
+        "path": str(audit.audit_path()),
+        "chain_intact": ok, "chain_message": msg, "total_records": n,
+        "entries": [{"line": audit.summarize(r), "record": r} for r in recs],
+    }}
