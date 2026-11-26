@@ -60,6 +60,10 @@ public sealed class RpcRequest
     public string? Token { get; set; }
     public string? Method { get; set; }
     public JsonElement Params { get; set; }
+
+    /// <summary>Verified caller, set by the socket server (never from the wire).</summary>
+    [JsonIgnore]
+    public Auth.Principal? Principal { get; set; }
 }
 
 /// <summary>A method response (docs/05 §5.3).</summary>

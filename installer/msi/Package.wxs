@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Revit MCP installer (per-user, no admin rights).
+
+  Installs the Autodesk .bundle to %APPDATA%\Autodesk\ApplicationPlugins\RevitMCP.bundle,
+  where Revit 2025-2027 load it automatically (PackageContents.xml picks the
+  right add-in build per Revit version). After install it registers the MCP
+  server with Claude Desktop / Claude Code; before uninstall it unregisters it.
+  Both steps run hidden and never fail the install (Return="ignore"); the
+  ribbon's "Connect Claude" button repeats registration on demand.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="Revit MCP"
+           Manufacturer="$(var.Publisher)"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="$(var.UpgradeCode)"
+           Scope="perUser"
+           Language="1033"
+           Compressed="yes">
+
+    <SummaryInformation Description="Revit MCP $(var.ProductVersion): connects Claude to Autodesk Revit" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="ProductIcon" SourceFile="..\assets\revitmcp.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon" />
+    <Property Id="ARPHELPLINK" Value="$(var.HelpUrl)" />
+    <Property Id="ARPURLINFOABOUT" Value="$(var.AboutUrl)" />
+    <!-- ARPNOMODIFY is already set by WixUI_Minimal. -->
+
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+    <ui:WixUI Id="WixUI_Minimal" />
+
+    <!-- Remembered install path, so uninstall can remove files Revit/Python created later. -->
+    <Property Id="BUNDLE_DIR_REMEMBERED">
+      <RegistrySearch Id="FindBundleDir" Root="HKCU" Key="Software\RevitMCP" Name="BundleDir" Type="raw" />
+    </Property>
+
+    <StandardDirectory Id="AppDataFolder">
+      <Directory Id="AutodeskDir" Name="Autodesk">
+        <Directory Id="PluginsDir" Name="ApplicationPlugins">
+          <Directory Id="INSTALLFOLDER" Name="RevitMCP.bundle" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Revit MCP" AllowAbsent="no">
+      <Files Directory="INSTALLFOLDER" Include="$(var.BundleDir)\**" />
+      <Component Id="BundleRegistration" Directory="INSTALLFOLDER" Guid="*">
+        <RegistryValue Root="HKCU" Key="Software\RevitMCP" Name="BundleDir" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\RevitMCP" Name="Version" Value="$(var.ProductVersion)" Type="string" />
+        <util:RemoveFolderEx On="uninstall" Property="BUNDLE_DIR_REMEMBERED" />
+      </Component>
+    </Feature>
+
+    <!-- Claude registration (hidden console; immediate = runs as the installing user with their environment). -->
+    <SetProperty Id="WixQuietExecCmdLine" Action="SetRegisterClaudeCmd" Sequence="execute"
+                 Before="RegisterClaude" Condition="NOT REMOVE~=&quot;ALL&quot;"
+                 Value="&quot;[INSTALLFOLDER]Contents\Server\revit-mcp-server.exe&quot; setup register" />
+    <CustomAction Id="RegisterClaude" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="immediate" Return="ignore" />
+
+    <SetProperty Id="WixQuietExecCmdLine" Action="SetUnregisterClaudeCmd" Sequence="execute"
+                 Before="UnregisterClaude" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"
+                 Value="&quot;[INSTALLFOLDER]Contents\Server\revit-mcp-server.exe&quot; setup unregister" />
+    <CustomAction Id="UnregisterClaude" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="immediate" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="UnregisterClaude" Before="InstallInitialize"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="RegisterClaude" After="InstallFinalize"
+              Condition="NOT REMOVE~=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+
+  </Package>
+</Wix>

@@ -15,6 +15,9 @@ class Session:
     protocol_version: str
     revit_version: str | None
     pid: int | None
+    # Where `token` came from: "session" (session.json, full access) or
+    # "env"/"file" (a scoped token from REVIT_MCP_TOKEN / REVIT_MCP_TOKEN_FILE).
+    token_source: str = "session"
 
 
 class SessionNotFound(Exception):
@@ -38,10 +41,27 @@ def read_session() -> Session:
         )
     # utf-8-sig tolerates a BOM (some Windows tools add one) and plain UTF-8.
     data = json.loads(path.read_text(encoding="utf-8-sig"))
+    token, source = configured_token(str(data["token"]))
     return Session(
         port=int(data["port"]),
-        token=str(data["token"]),
+        token=token,
         protocol_version=str(data.get("protocol_version", "")),
         revit_version=data.get("revit_version"),
         pid=data.get("pid"),
+        token_source=source,
     )
+
+
+def configured_token(session_token: str) -> tuple[str, str]:
+    """The credential this server presents to the add-in.
+
+    A scoped token (see revit_mcp.auth) configured per client wins over the
+    full-access session token, so e.g. a reviewer's client can be read-only.
+    """
+    env = os.environ.get("REVIT_MCP_TOKEN", "").strip()
+    if env:
+        return env, "env"
+    file = os.environ.get("REVIT_MCP_TOKEN_FILE", "").strip()
+    if file:
+        return Path(file).read_text(encoding="utf-8-sig").strip(), "file"
+    return session_token, "session"

@@ -32,6 +32,12 @@ public sealed class RevitCommandHandler : IExternalEventHandler
         while (_queue.TryDequeue(out var pending))
         {
             var req = pending.Request;
+            if (!pending.TryStart())
+            {
+                // The client was already told this timed out — never run it late.
+                AddinLog.Warn($"Skipping cancelled request id={req.Id} method={req.Method} (timed out before Revit was idle).");
+                continue;
+            }
             var sw = Stopwatch.StartNew();
             RpcResponse response;
             try

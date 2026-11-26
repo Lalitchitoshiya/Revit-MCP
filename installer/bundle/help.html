@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revit MCP Help</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0; --accent:#1f6feb; --code:#f6f8fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d; --accent:#4493f8; --code:#161b22; }
+  }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 "Segoe UI", system-ui, sans-serif; }
+  main { max-width:820px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  h2 { font-size:20px; margin:36px 0 8px; padding-top:12px; border-top:1px solid var(--line); }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  code, kbd { background:var(--code); border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-family:Consolas, monospace; font-size:14px; }
+  table { border-collapse:collapse; width:100%; margin:8px 0; }
+  th, td { text-align:left; vertical-align:top; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; }
+  a { color:var(--accent); }
+  .note { border-left:3px solid var(--accent); padding:4px 12px; color:var(--muted); }
+  nav a { margin-right:14px; white-space:nowrap; }
+</style>
+</head>
+<body>
+<main>
+<h1>Revit MCP</h1>
+<p class="sub">Version {{VERSION}} · {{PUBLISHER}}</p>
+
+<nav>
+  <a href="#start">Getting started</a><a href="#changes">How changes work</a><a href="#ribbon">Ribbon</a>
+  <a href="#privacy">Privacy</a><a href="#access">Access &amp; audit</a><a href="#trouble">Troubleshooting</a><a href="#support">Support</a>
+</nav>
+
+<p>Revit MCP connects <strong>Claude</strong> to the Revit model you have open. Ask in plain language,
+for example <em>"How many doors are on Level 2?"</em> or <em>"Add a 4 m by 3 m room with a door on Level 1"</em>.
+Claude reads the model to understand it, proposes changes, shows you a preview, and only changes the model
+after you approve. Every change is one Revit undo step.</p>
+
+<h2 id="start">Getting started</h2>
+<table>
+  <tr><th>You need</th><td>Revit 2025, 2026 or 2027 on Windows 10/11, and
+    <a href="https://claude.ai/download">Claude Desktop</a> or Claude Code with a Claude plan.</td></tr>
+</table>
+<ol>
+  <li>Install Revit MCP. The installer registers it with Claude Desktop and Claude Code if they are installed.</li>
+  <li>Start Revit and open a project. A <strong>Revit MCP</strong> tab appears on the ribbon.</li>
+  <li>Start (or restart) Claude Desktop. In a new chat, ask <em>"Check the Revit connection"</em>.</li>
+</ol>
+<p class="note">Installed Claude after Revit MCP? Click <strong>Revit MCP &gt; Connect Claude</strong> in Revit, then restart Claude.</p>
+
+<h2 id="changes">How changes work</h2>
+<table>
+  <tr><th>Step</th><th>What happens</th></tr>
+  <tr><td>Stage</td><td>Claude writes a plan (for example: 4 walls, 1 door, 1 room). Nothing changes yet.</td></tr>
+  <tr><td>Preview</td><td>The plan is checked against your live model: levels, types and hosts are resolved, problems are reported. Nothing changes yet.</td></tr>
+  <tr><td>Approve</td><td>Claude asks you to approve the previewed change. Declining leaves the model untouched.</td></tr>
+  <tr><td>Commit</td><td>The whole plan is applied as <strong>one</strong> Revit undo step. If any part fails, nothing is applied.</td></tr>
+  <tr><td>Undo</td><td>Ask Claude to undo, or use Revit's own <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</td></tr>
+</table>
+<p>Today Claude can create walls, doors, windows, floors, rooms and levels, and read levels, grids, types,
+families and elements. It does not edit or delete existing elements.</p>
+
+<h2 id="ribbon">The Revit MCP ribbon tab</h2>
+<table>
+  <tr><th>Button</th><th>Use it to</th></tr>
+  <tr><td>Status</td><td>See whether Claude is connected, with what access, and where the logs are.</td></tr>
+  <tr><td>Connect Claude</td><td>Register Revit MCP with Claude Desktop / Claude Code again (for example after installing Claude).</td></tr>
+  <tr><td>Pause / Resume</td><td>Stop Claude from reaching Revit until you resume. Nothing in the model changes.</td></tr>
+  <tr><td>Audit log</td><td>See who approved each change and when, and check the log has not been edited.</td></tr>
+  <tr><td>Help / Logs</td><td>This page, and the support logs folder.</td></tr>
+</table>
+
+<h2 id="privacy">Privacy and data</h2>
+<ul>
+  <li>The Revit add-in listens only on this computer (127.0.0.1). It cannot be reached from the network.</li>
+  <li>Model information that Claude asks for (for example level names, element types, element counts and
+    geometry of the elements it queries) is sent to Claude through <em>your</em> Claude app, under your Claude
+    account and Anthropic's terms. Revit MCP itself sends nothing anywhere else and collects no telemetry.</li>
+  <li>Logs, the audit log and access settings stay on this computer in <code>%LOCALAPPDATA%\RevitMCP</code>.</li>
+</ul>
+
+<h2 id="access">Access control and audit log</h2>
+<p>By default the Claude app on this computer may read the model and, after your approval, change it.
+Administrators can issue <strong>read-only</strong> or <strong>read-write</strong> access tokens that expire,
+and revoke or rotate them, with the bundled tool:</p>
+<p><code>revit-mcp-server.exe auth --help</code> (in <code>%APPDATA%\Autodesk\ApplicationPlugins\RevitMCP.bundle\Contents\Server</code>)</p>
+<p>Every commit, undo and refused request is written to a tamper-evident audit log
+(<code>%LOCALAPPDATA%\RevitMCP\audit\audit.jsonl</code>): who approved, when, how, what changed, in which model.</p>
+
+<h2 id="trouble">Troubleshooting</h2>
+<table>
+  <tr><th>Symptom</th><th>Try</th></tr>
+  <tr><td>Claude has no Revit tools</td><td>Click <strong>Connect Claude</strong>, then fully quit and restart Claude Desktop.</td></tr>
+  <tr><td>"Revit is not reachable"</td><td>Make sure Revit is running with a project open, and that <strong>Status</strong> doesn't say <em>Paused</em>.</td></tr>
+  <tr><td>"Revit is busy"</td><td>Finish or cancel what you are doing in Revit (an edit mode or an open dialog), then ask again.</td></tr>
+  <tr><td>A change was refused</td><td>The preview explains why (for example a missing type or level). Ask Claude to adjust the plan.</td></tr>
+</table>
+
+<h2 id="support">Support and uninstall</h2>
+<p>Contact <a href="mailto:{{SUPPORT_EMAIL}}">{{SUPPORT_EMAIL}}</a>. Use <strong>Status &gt; Copy details</strong>
+and attach the files from <strong>Logs</strong>.</p>
+<p>To uninstall, close Revit and use Windows <em>Settings &gt; Apps &gt; Installed apps &gt; Revit MCP</em>.
+This also removes Revit MCP from Claude Desktop and Claude Code. Your audit log is kept.</p>
+</main>
+</body>
+</html>

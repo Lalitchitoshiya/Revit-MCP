@@ -1,11 +1,13 @@
 {
-  "_comment": "Copy to .mcp.json and set `command` to your venv's python.exe (absolute path). Registers the Revit MCP server with your Claude host.",
+  "_comment": "Copy to .mcp.json and set `command` to your venv's python.exe (absolute path). Registers the Revit MCP server with your Claude host. Optional env (docs/09-governance.md): REVIT_MCP_TOKEN (scoped token from `python -m revit_mcp.auth issue`; omit to use the full-access session token), REVIT_MCP_APPROVAL (elicit | elicit_or_token | token).",
   "mcpServers": {
     "revit": {
       "type": "stdio",
       "command": "<ABSOLUTE_PATH_TO>\\server\\.venv\\Scripts\\python.exe",
       "args": ["-m", "revit_mcp"],
-      "env": {}
+      "env": {
+        "REVIT_MCP_APPROVAL": "elicit"
+      }
     }
   }
 }

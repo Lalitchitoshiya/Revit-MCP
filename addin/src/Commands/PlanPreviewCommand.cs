@@ -70,7 +70,7 @@ public sealed class PlanPreviewCommand : DocumentCommand
         }
 
         // Only a clean (commit-eligible) plan is remembered as previewed.
-        if (!anyError) PlanRegistry.MarkPreviewed(plan.Hash);
+        if (!anyError) PlanRegistry.MarkPreviewed(doc, plan.Hash);
 
         var overall = anyError ? "errors" : anyWarning ? "warnings" : "ok";
         var result = new

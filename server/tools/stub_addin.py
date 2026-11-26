@@ -10,6 +10,11 @@ data. Run it, then run the MCP server (or tools/test_health.py) against it.
 
 This mirrors the C# add-in's framing/handshake so the Python client code is
 validated against the same contract the real add-in implements.
+
+Governance mirror (for demos/tests without Revit): accepts the session token or
+scoped tokens from auth.json (revit_mcp.auth.verify — same rules as the C#
+TokenValidator), enforces per-method scopes, implements a fake
+plan.preview/commit/undo, and writes audit records in the add-in's format.
 """
 
 from __future__ import annotations
@@ -18,8 +23,11 @@ import argparse
 import asyncio
 import json
 import os
+import hashlib
 import secrets
 from pathlib import Path
+
+from revit_mcp import audit, auth
 
 PROTOCOL_VERSION = "1.0"
 
@@ -36,6 +44,66 @@ class StubAddin:
     def __init__(self, document_open: bool = True):
         self.token = secrets.token_hex(32)
         self.document_open = document_open
+        self.previewed: set[str] = set()
+        self.committed: dict[str, list[int]] = {}
+        self.next_id = 1000
+
+    def _verify(self, token: str | None) -> auth.Principal:
+        return auth.verify(token, auth.load_policy(), self.token)
+
+    def _deny(self, method: str, token: str | None, code: str, reason: str) -> None:
+        claims = auth.decode_unverified(token or "") or {}
+        audit.append({"event": "auth.denied", "outcome": code, "method": method, "reason": reason,
+                      "principal": {"kind": "scoped(unverified)" if claims else "opaque",
+                                    "sub": claims.get("sub"), "jti": claims.get("jti")}})
+
+    def _plan_audit(self, params: dict, who: auth.Principal) -> dict:
+        plan = params.get("plan") or {}
+        return {"plan_id": params.get("plan_id"), "intent": plan.get("intent"),
+                "summary": params.get("summary"), "approval": params.get("approval"),
+                "principal": {"kind": who.kind, "sub": who.sub, "scopes": who.scopes, "jti": who.jti},
+                "document": {"title": "reference.rvt", "path": "C:/stub/reference.rvt"},
+                "revit_user": "stub-user", "os_user": os.environ.get("USERNAME"), "machine": "stub"}
+
+    def _dispatch(self, method: str, params: dict, who: auth.Principal) -> dict:
+        """Returns {"ok":True,"result":...} or {"ok":False,"error":...}."""
+        def fail(code, msg):
+            return {"ok": False, "error": {"code": code, "message": msg}}
+        if method == "health.check":
+            return {"ok": True, "result": self._health_result()}
+        if method == "plan.preview":
+            plan = params.get("plan") or {}
+            h = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
+            self.previewed.add(h)
+            n = len(plan.get("actions", []))
+            return {"ok": True, "result": {"plan_hash": h, "overall": "ok", "actions": [],
+                                           "summary": f"Would create {n} action(s)."}}
+        if method == "plan.commit":
+            plan = params.get("plan") or {}
+            h = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
+            rec = self._plan_audit(params, who)
+            rec["plan_hash"] = h
+            if params.get("plan_hash") not in (None, h) or h not in self.previewed:
+                audit.append({"event": "plan.commit", "outcome": "refused", **rec})
+                return fail("PLAN_NOT_PREVIEWED", "not previewed")
+            self.previewed.discard(h)  # one preview authorises one commit
+            created = []
+            for _ in plan.get("actions", []):
+                self.next_id += 1
+                created.append({"id": self.next_id, "category": "Walls"})
+            self.committed[params["plan_id"]] = [c["id"] for c in created]
+            audit.append({"event": "plan.commit", "outcome": "committed", **rec, "created": created})
+            return {"ok": True, "result": {"plan_id": params["plan_id"], "committed": True,
+                                           "created": created, "audited": True}}
+        if method == "plan.undo":
+            ids = self.committed.pop(params.get("plan_id"), None)
+            if ids is None:
+                return fail("PLAN_NOT_FOUND", "no such committed plan")
+            audit.append({"event": "plan.undo", "outcome": "undone", **self._plan_audit(params, who),
+                          "deleted_ids": ids})
+            return {"ok": True, "result": {"plan_id": params["plan_id"], "undone": True,
+                                           "deleted_count": len(ids), "audited": True}}
+        return fail("UNKNOWN_METHOD", f"Unknown method '{method}'.")
 
     def _health_result(self) -> dict:
         return {
@@ -63,8 +131,11 @@ class StubAddin:
             await self._send(writer, {"type": "error", "code": "VERSION_INCOMPATIBLE"})
             writer.close()
             return
-        if hello.get("token") != self.token:
-            await self._send(writer, {"type": "error", "code": "BAD_TOKEN"})
+        try:
+            self._verify(hello.get("token"))
+        except auth.AuthError as e:
+            self._deny("handshake", hello.get("token"), e.code, e.message)
+            await self._send(writer, {"type": "error", "code": e.code})
             writer.close()
             return
 
@@ -83,17 +154,22 @@ class StubAddin:
                 break
             req = json.loads(line)
             rid = req.get("id")
-            if req.get("token") != self.token:
-                await self._send(writer, {"id": rid, "ok": False,
-                                          "error": {"code": "BAD_TOKEN", "message": "bad token"}})
-                continue
             method = req.get("method")
-            if method == "health.check":
-                await self._send(writer, {"id": rid, "ok": True, "result": self._health_result()})
-            else:
+            try:
+                who = self._verify(req.get("token"))
+            except auth.AuthError as e:
+                self._deny(method, req.get("token"), e.code, e.message)
                 await self._send(writer, {"id": rid, "ok": False,
-                                          "error": {"code": "UNKNOWN_METHOD",
-                                                    "message": f"Unknown method '{method}'."}})
+                                          "error": {"code": e.code, "message": e.message}})
+                continue
+            need = auth.required_scope(method)
+            if not who.can(need):
+                msg = f"Token '{who.sub}' may not call '{method}'; it needs '{need}'."
+                self._deny(method, req.get("token"), "SCOPE_DENIED", msg)
+                await self._send(writer, {"id": rid, "ok": False,
+                                          "error": {"code": "SCOPE_DENIED", "message": msg}})
+                continue
+            await self._send(writer, {"id": rid, **self._dispatch(method, req.get("params") or {}, who)})
         print(f"[stub] client disconnected: {peer}")
         writer.close()
 

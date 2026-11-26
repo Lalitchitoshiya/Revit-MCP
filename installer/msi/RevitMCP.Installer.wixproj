@@ -1,0 +1,32 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <!--
+    Per-user MSI for Revit MCP (no admin rights needed). Built by installer\build.ps1,
+    which stages the Autodesk .bundle first and passes:
+      -p:ProductVersion=1.0.0 -p:BundleDir=<staged RevitMCP.bundle> -p:Publisher=... -p:UpgradeCode=...
+      -p:HelpUrl=... -p:AboutUrl=...
+
+    WiX v5 (MS-RL licensed). v6+ adds the Open Source Maintenance Fee EULA; stay on
+    v5 unless that is accepted.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <OutputName>RevitMCP-$(ProductVersion)</OutputName>
+    <DefineConstants>ProductVersion=$(ProductVersion);BundleDir=$(BundleDir);Publisher=$(Publisher);UpgradeCode=$(UpgradeCode);HelpUrl=$(HelpUrl);AboutUrl=$(AboutUrl)</DefineConstants>
+    <!--
+      ICE38/ICE64/ICE91 flag per-user (AppData) files whose component key path
+      isn't an HKCU value. That is inherent to an Autodesk per-user .bundle
+      install; folder cleanup is handled explicitly (RemoveFolderEx).
+    -->
+    <SuppressIces>ICE38;ICE64;ICE91</SuppressIces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+</Project>
